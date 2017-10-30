@@ -173,14 +173,14 @@ xgb.plot.importance(importance_matrix = importance)
 trn$US<-ifelse(trn$country_destination=='US',as.logical(1),as.logical(0))
 tst$US<-ifelse(tst$country_destination=='US',as.logical(1),as.logical(0))
 tst$pre_US<-ifelse(tst$pre_NDF==as.logical(1),as.logical(0),NA)
-tst_US<-subset(tst,pre_NDF=as.logical(0))
+tst_US<-subset(tst,pre_NDF==as.logical(0))
 
 ###### Use xgboost method to fit the model
 X = as.matrix(trn[,-c(1,15,24,25)]) #remove unnumeric columns
 y = trn$US
 bst <- xgboost(data = X, label = y, max.depth = 4, eta = 0.1, nthread = 2, nround = 300, objective = "binary:logistic", verbose = 1)
 
-tst_US$pre_US = ifelse(predict(bst, data.matrix(tst[,-c(1,15,24,25)]))>0.5,as.logical(1),as.logical(0))
+tst_US$pre_US = ifelse(predict(bst, data.matrix(tst_US[,-c(1,15,24,25)]))>0.5,as.logical(1),as.logical(0))
 tb_pre<-tst_US[,c('US','pre_US')]
 conclusion<-table(tb_pre)
 conclusion
@@ -194,7 +194,14 @@ importance <- xgb.importance(feature_names =colnames(trn[,-c(1,15,24,25)]), mode
 xgb.plot.importance(importance_matrix = importance)
 
 ###### Total accuracy of above two layer's model
-tst$pre_US<-ifelse(is.na(tst$pre_US),tst_US$pre_US,tst$pre_US)
+j=1
+for(i in 1:nrow(tst)){
+  if(tst$id[i]==tst_US$id[j]){
+    tst$pre_US[i]<-tst_US$pre_US[j]
+    j<-j+1
+  }
+}
+
 tst$US_result<-ifelse(tst$US==tst$pre_US,1,0)
 total_accuracy<-nrow(subset(tst,(US_result==1)&(NDF_result==1)))/nrow(tst)
 total_accuracy
