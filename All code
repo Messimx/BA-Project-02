@@ -16,14 +16,14 @@ library(lubridate)
 library(stringr)
 library(dplyr)
 library(magrittr)
-t1=Sys.time()
+
 #loading the files
 options(scipen = 999)
-countries="/Users/sujay/Desktop/NYU/BA Assignments/Airbnb Data/countries.csv"
-age_gender="/Users/sujay/Desktop/NYU/BA Assignments/Airbnb Data/age_gender_bkts.csv"
-sessions_df="/Users/sujay/Desktop/NYU/BA Assignments/Airbnb Data/sessions.csv"
-test_user="/Users/sujay/Desktop/NYU/BA Assignments/Airbnb Data/test_users.csv"
-train_users="/Users/sujay/Desktop/NYU/BA Assignments/Airbnb Data/train_users_2.csv"
+countries="C:/Users/Messi/Desktop/Classes/BusinessAnalytics/Project/Project02/countries.csv"
+age_gender="C:/Users/Messi/Desktop/Classes/BusinessAnalytics/Project/Project02/age_gender_bkts.csv"
+sessions_df="C:/Users/Messi/Desktop/Classes/BusinessAnalytics/Project/Project02/sessions.csv"
+test_user="C:/Users/Messi/Desktop/Classes/BusinessAnalytics/Project/Project02/test_users.csv"
+train_users="C:/Users/Messi/Desktop/Classes/BusinessAnalytics/Project/Project02/train_users_2.csv"
 countries_df=read.csv(countries,stringsAsFactors = F,header = T)
 age_gender_df=read.csv(age_gender,stringsAsFactors = F,header = T)
 sessions_df=read.csv(sessions_df,stringsAsFactors = F,header = T)
@@ -133,10 +133,10 @@ chr_num<-function(x){
 }
 
 new_df[,c('age','signup_flow','totalActions', 'uniqueActions','uniqueAction_type','uniqueAction_detail')]<-sapply(new_df[,c('age','signup_flow','totalActions', 'uniqueActions','uniqueAction_type','uniqueAction_detail')],int_num)
-new_df[,c('date_account_created','gender','signup_method','language','affiliate_channel','affiliate_provider',
+new_df[,c('date_account_created','timestamp_first_active','gender','signup_method','language','affiliate_channel','affiliate_provider',
           "first_affiliate_tracked",'signup_app','first_device_type','first_browser','age_bucket',
           'freqAction_detail','device')]<-sapply(
-            new_df[,c('date_account_created','gender','signup_method','language','affiliate_channel','affiliate_provider',
+            new_df[,c('date_account_created','timestamp_first_active','gender','signup_method','language','affiliate_channel','affiliate_provider',
                       "first_affiliate_tracked",'signup_app','first_device_type','first_browser','age_bucket',
                       'freqAction_detail','device')], chr_num
           )
@@ -152,7 +152,8 @@ tst<-new_df[-trn_index,]
 ###### Use xgboost method to fit the model
 X = as.matrix(trn[,-c(1,15,24)]) #remove unnumeric columns
 y = trn$NDF
-bst <- xgboost(data = X, label = y, max.depth = 4, eta = 0.1, nthread = 2, nround = 300, objective = "binary:logistic", verbose = 1)
+dtrain <- xgb.DMatrix(data = X, label=y)
+bst <- xgb.train(data = dtrain,max.depth = 4, eta = 0.1, nthread = 2, nround = 300, objective = "binary:logistic", verbose = 1)
 
 tst$pre_NDF = ifelse(predict(bst, data.matrix(tst[,-c(1,15,24)]))>0.5,as.logical(1),as.logical(0))
 tst$NDF_result<-ifelse(tst$NDF==tst$pre_NDF,1,0)
@@ -178,7 +179,8 @@ tst_US<-subset(tst,pre_NDF==as.logical(0))
 ###### Use xgboost method to fit the model
 X = as.matrix(trn[,-c(1,15,24,25)]) #remove unnumeric columns
 y = trn$US
-bst <- xgboost(data = X, label = y, max.depth = 4, eta = 0.1, nthread = 2, nround = 300, objective = "binary:logistic", verbose = 1)
+dtrain <- xgb.DMatrix(data = X, label=y)
+bst <- xgb.train(data = dtrain,max.depth = 4, eta = 0.1, nthread = 2, nround = 300, objective = "binary:logistic", verbose = 1)
 
 tst_US$pre_US = ifelse(predict(bst, data.matrix(tst_US[,-c(1,15,24,25)]))>0.5,as.logical(1),as.logical(0))
 tb_pre<-tst_US[,c('US','pre_US')]
