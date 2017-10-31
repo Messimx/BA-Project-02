@@ -1,0 +1,250 @@
+#loading libraries
+library(dataQualityR)
+library(ggplot2)
+library(lubridate)
+library(stringr)
+library(dplyr)
+library(magrittr)
+library(car)
+library(caret)
+library(xgboost)
+library(rpart)
+library(rattle)
+#loading files
+options(scipen = 999)
+#loading train_users,test_user,sessions datasets
+sessions_df="/Users/sujay/Desktop/NYU/BA Assignments/Airbnb Data/sessions.csv"
+test_user="/Users/sujay/Desktop/NYU/BA Assignments/Airbnb Data/test_users.csv"
+train_users="/Users/sujay/Desktop/NYU/BA Assignments/Airbnb Data/train_users_2.csv"
+sessions_df=read.csv(sessions_df,stringsAsFactors = F,header = T)
+test_user_df=read.csv(test_user,stringsAsFactors = F,header = T)
+train_users_df=read.csv(train_users,stringsAsFactors = F,header = T)
+#setting the lables right
+names(sessions_df)[1] <- "id"
+names(test_user_df)[1] <- "id"
+names(train_users_df)[1] <- "id"
+
+#adding country column in test before merging
+test_user_df$country_destination = NA
+#merging test and train data
+new_df=rbind(train_users_df,test_user_df)
+#remove date of first booking
+new_df<-new_df[-4]
+#setting the date_account_created and timestamp values to correct format
+new_df$date_account_created=as.Date(new_df$date_account_created,"%Y-%m-%d")
+new_df$timestamp_first_active=(ymd_hms(new_df$timestamp_first_active,locale = Sys.getlocale("LC_TIME")))
+#droppping values before 2013
+new_df <- subset(new_df, as.integer(substr(date_account_created,1,4)) >= 2013)
+#age cleaning
+new_df<- new_df%>%
+  dplyr::mutate(
+    age = ifelse(age >= 1920, 2015 - age, age),
+    age = ifelse(age < 14 | age > 100, -1, age))
+
+new_df$age[is.na(new_df$age)] <- median(new_df$age, na.rm=TRUE)
+
+new_df<-new_df[!new_df$age<16,]
+#age bucketing
+new_df<- new_df%>%
+  dplyr::mutate(
+    age_bucket = cut(age, breaks = c(1, 4, 9, 14, 19, 24,
+                                     29, 34, 39, 44, 49, 54,
+                                     59, 64, 69, 74, 79, 84,
+                                     89, 94, 99, 105)),
+    age_bucket = plyr::mapvalues(age_bucket,
+                                 from=c("(1,4]", "(4,9]", "(9,14]", "(14,19]",
+                                        "(19,24]", "(24,29]", "(29,34]", "(34,39]",
+                                        "(39,44]", "(44,49]", "(49,54]", "(54,59]",
+                                        "(59,64]", "(64,69]", "(69,74]", "(74,79]",
+                                        "(79,84]", "(84,89]", "(89,94]", "(94,99]", "(99,105]"),
+                                 to=c("0-4", "5-9", "10-14", "15-19",
+                                      "20-24", "25-29", "30-34", "35-39",
+                                      "40-44", "45-49", "50-54", "55-59",
+                                      "60-64", "65-69", "70-74", "75-79",
+                                      "80-84", "85-89", "90-94", "95-99", "100+")))
+
+#split date_account_created in year, month and day
+new_df[,"dmy_year"] = year(new_df[,'date_account_created'])
+new_df[,"dmy_month"] = month(new_df[,'date_account_created'])
+new_df[,"dmy_day"] = day(new_df[,'date_account_created'])
+new_df = new_df[,-c(which(colnames(new_df) %in% c('date_account_created')))]
+
+# split timestamp_first_active in year, month and day
+new_df[,'tfa_year'] = year(new_df[,'timestamp_first_active'])
+new_df[,'tfa_month'] = month(new_df[,'timestamp_first_active'])
+new_df[,'tfa_day'] = day(new_df[,'timestamp_first_active'])
+new_df = new_df[,-c(which(colnames(new_df) %in% c('timestamp_first_active')))]
+
+#dropping age column and reatin the agebucket
+new_df<-new_df[-5]
+
+#removing all NA country destination rows
+new_df=new_df[!is.na(new_df$country_destination),]
+
+#check data quality for new_df
+num.file <- paste(tempdir(), "/dq_num.csv", sep= "")
+cat.file <- paste(tempdir(), "/dq_cat.csv", sep= "")
+checkDataQuality(data= new_df, out.file.num= num.file, out.file.cat= cat.file)
+df_num=read.csv(num.file)
+df_cat=read.csv(cat.file)
+
+#check data quality for sessions data
+num.file <- paste(tempdir(), "/dq_num.csv", sep= "")
+cat.file <- paste(tempdir(), "/dq_cat.csv", sep= "")
+checkDataQuality(data= sessions_df, out.file.num= num.file, out.file.cat= cat.file)
+df_num=read.csv(num.file)
+df_cat=read.csv(cat.file)
+#
+sessions_df$secs_elapsed[is.na(sessions_df$secs_elapsed)] <- mean(na.omit(sessions_df$secs_elapsed))
+#feature engineering sessions data
+session_unique <- sessions_df %>% group_by(id) %>% summarize(totalActions = length(action), 
+                                                             uniqueActions = length(unique(action)),
+                                                             uniqueAction_type=length(unique(action_type)),
+                                                             uniqueAction_detail=length(unique(action_detail)),   
+                                                             freqAction_detail=names(which.max(table(action_detail))),
+                                                             device = names(which.max(table(device_type))),
+                                                             time_sec = sum(secs_elapsed))
+#merging by id
+new_df=merge(new_df,session_unique,"id")
+
+#check data quality for new_df
+num.file <- paste(tempdir(), "/dq_num.csv", sep= "")
+cat.file <- paste(tempdir(), "/dq_cat.csv", sep= "")
+checkDataQuality(data= new_df, out.file.num= num.file, out.file.cat= cat.file)
+df_num=read.csv(num.file)
+df_cat=read.csv(cat.file)
+
+#replacing missing values Filled in blanks with "NULL" so it was a new factor level.
+new_df$freqAction_detail[new_df$freqAction_detail==""]=-1
+
+#new_df$freqAction_detail[is.na(new_df$freqAction_detail)]=NULL
+new_df$first_affiliate_tracked[new_df$first_affiliate_tracked==""]=-1
+#duplicating 
+#xyz=new_df
+
+############### INPUT CODE HERE ###################
+
+
+
+
+
+
+
+
+
+
+
+
+############### INPUT CODE HERE ###################
+
+### rpart ####
+rpart_df=new_df
+rpart_df$id <- NULL
+cols = c(1,2,4,5,6,7,8,9,10,11,16,17,18,19,20,21,22,23,24,25)
+rpart_df[,cols] %<>% lapply(function(x) as.factor(x))
+str(rpart_df)
+n <- nrow(rpart_df)
+for (i in 1: 25) {
+  index = sample(1:n, replace = TRUE)
+  train_rpart_df <- rpart_df[index, ]
+  test_rpart_df <- rpart_df[setdiff(1:n, index), ]}
+
+rpart_model_1 <- rpart(country_destination ~gender + signup_method + affiliate_channel + 
+                       signup_app + first_device_type + uniqueAction_type + uniqueAction_detail + 
+                       time_sec +device+language+first_affiliate_tracked+train_rpart_df$affiliate_provider
+                     +first_browser+age_bucket,
+                     data = train_rpart_df)
+rpart_model_2 <- rpart(country_destination ~gender + signup_method + affiliate_channel + 
+                         signup_app + first_device_type + uniqueAction_type + uniqueAction_detail + 
+                         time_sec +device,
+                      data = train_rpart_df)
+
+prediction <- predict(rpart_model_2, newdata = test_rpart_df, type = "class")
+accuracy = sum(test_rpart_df$country_destination == prediction) / length(prediction)
+accuracy
+
+fancyRpartPlot(bootrpart)
+
+######
+set.seed(0101)
+split=(0.7)
+index=sample(1:nrow(new_df),(split)*nrow(new_df))
+testd <- new_df[-index,]
+#testd=testd[-grep('country_destination', colnames(testd))] 
+traind <- new_df[index,]
+labels = traind['country_destination']
+#labels_t = testd['country_destination'] ###
+
+#XGBOOST
+#dummy variables creation
+labels_t=recode(labels_t$country_destination,"'NDF'=0; 'US'=1; 'other'=2; 'FR'=3; 'CA'=4; 'GB'=5; 'ES'=6; 'IT'=7; 'PT'=8; 'NL'=9; 'DE'=10; 'AU'=11")
+ohe_feats = c('gender', 'signup_method', 'signup_flow', 'language', 'affiliate_channel', 'affiliate_provider', 'first_affiliate_tracked', 'signup_app', 'first_device_type', 'first_browser','age_bucket','freqAction_detail','device')
+dummies <- dummyVars(~ gender + signup_method + signup_flow + language + affiliate_channel + affiliate_provider + first_affiliate_tracked + signup_app + first_device_type + first_browser+age_bucket+freqAction_detail+device, data = new_df)
+df_all_ohe <- as.data.frame(predict(dummies, newdata = new_df))
+df_all_combined <- cbind(new_df[,-c(which(colnames(new_df) %in% ohe_feats))],df_all_ohe)
+
+X = df_all_combined[df_all_combined$id %in% traind$id,]
+y <- recode(labels$country_destination,"'NDF'=0; 'US'=1; 'other'=2; 'FR'=3; 'CA'=4; 'GB'=5; 'ES'=6; 'IT'=7; 'PT'=8; 'NL'=9; 'DE'=10; 'AU'=11")
+X_test = df_all_combined[df_all_combined$id %in% testd$id,]
+
+xgb <- xgboost(data = data.matrix(X), 
+               label = y, 
+               eta = 0.3, #shrinkage rate to control overfitting through conservative approach
+               max_depth = 10, #how many levels in the tree
+               nround=10, #controls the maximum number of iterations.it is similar to the number of trees to grow(tuned using CV)
+               subsample = 0.5, #how much of the data to use for each tree
+               colsample_bytree = 0.5, #how many variables to consider for each tree
+               seed = 1,
+               eval_metric = "mlogloss",
+               objective = "multi:softprob",
+               num_class = 12,
+               nthread = 4,
+               missing=NA
+)
+
+## Anayse and visualize xgboost
+model <- xgb.dump(xgb, with_stats = T)
+model[1:10]
+names <- dimnames(data.matrix(X))[[2]]
+importance_matrix <- xgb.importance(names, model = xgb)
+
+xgb.plot.importance(importance_matrix[1:20,])
+# predict values in test set
+y_pred <- predict(xgb, data.matrix(X_test),missing=NA)
+
+preds <- as.data.frame(matrix(y_pred, nrow=12))
+rownames(preds) <- c('NDF','US','other','FR','CA','GB','ES','IT','PT','NL','DE','AU')
+preds_top5 <- as.vector(apply(preds, 2, function(x) names(sort(x)[12:8])))
+
+ids <- NULL
+for (i in 1:NROW(X_test)) {
+  idx <- X_test$id[i]
+  ids <- append(ids, rep(idx,5))
+}
+results <- NULL
+results$id <- ids
+results$country <- preds_top5
+# generate result file
+results <- as.data.frame(results)
+
+##############
+library(DiagrammeR)
+xgb.plot.tree(feature_names = names, model = xgb, n_first_tree = 20)
+######
+params <- list(booster = "gbtree", objective="multi:softprob", 
+               eta=0.3, gamma=0, max_depth=6, min_child_weight=1, subsample=1, colsample_bytree=1) ###CN
+xgbcv <- xgb.cv( params = params, data = data.matrix(X), nrounds = 50, nfold = 5, label=y,
+                 showsd = T, stratified = T, print_every_n = 10, early_stop_rounds = 20, 
+                 num_class =12,maximize = F)
+
+
+
+num.class=length(y)
+pred.cv = matrix(model_xgb$evaluation_log, nrow=length(model_xgb$evaluation_log)/num.class, ncol=num.class)
+pred.cv = max.col(pred.cv, "last")
+
+
+
+
+
+
