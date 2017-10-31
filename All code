@@ -332,3 +332,82 @@ for(i in 1:nrow(tst)){
 tst$US_result<-ifelse(tst$US==tst$pre_US,1,0)
 total_accuracy<-nrow(subset(tst,(US_result==1)&(NDF_result==1)))/nrow(tst)
 total_accuracy
+
+
+
+######## Improvement Method (also using xgboost) ######################
+new_df<-new_df_stored
+set.seed(0101)
+split=(0.7)
+index=sample(1:nrow(new_df),(split)*nrow(new_df))
+testd <- new_df[-index,]
+#testd=testd[-grep('country_destination', colnames(testd))] 
+traind <- new_df[index,]
+labels = traind['country_destination']
+#labels_t = testd['country_destination'] ###
+
+#XGBOOST
+#dummy variables creation
+labels_t=recode(labels_t$country_destination,"'NDF'=0; 'US'=1; 'other'=2; 'FR'=3; 'CA'=4; 'GB'=5; 'ES'=6; 'IT'=7; 'PT'=8; 'NL'=9; 'DE'=10; 'AU'=11")
+ohe_feats = c('gender', 'signup_method', 'signup_flow', 'language', 'affiliate_channel', 'affiliate_provider', 'first_affiliate_tracked', 'signup_app', 'first_device_type', 'first_browser','age_bucket','freqAction_detail','device')
+dummies <- dummyVars(~ gender + signup_method + signup_flow + language + affiliate_channel + affiliate_provider + first_affiliate_tracked + signup_app + first_device_type + first_browser+age_bucket+freqAction_detail+device, data = new_df)
+df_all_ohe <- as.data.frame(predict(dummies, newdata = new_df))
+df_all_combined <- cbind(new_df[,-c(which(colnames(new_df) %in% ohe_feats))],df_all_ohe)
+
+X = df_all_combined[df_all_combined$id %in% traind$id,]
+y <- recode(labels$country_destination,"'NDF'=0; 'US'=1; 'other'=2; 'FR'=3; 'CA'=4; 'GB'=5; 'ES'=6; 'IT'=7; 'PT'=8; 'NL'=9; 'DE'=10; 'AU'=11")
+X_test = df_all_combined[df_all_combined$id %in% testd$id,]
+#cross validation
+params <- list(booster = "gbtree", objective="multi:softprob", 
+               eta=0.3, gamma=0, max_depth=6, min_child_weight=1, subsample=1, colsample_bytree=1) ###CN
+xgbcv <- xgb.cv( params = params, data = data.matrix(X), nrounds = 50, nfold = 5, label=y,
+                 showsd = T, stratified = T, print_every_n = 10, early_stop_rounds = 20, 
+                 num_class =12,maximize = F)
+#trainmodel
+xgb <- xgboost(data = data.matrix(X), 
+               label = y, 
+               eta = 0.3, #shrinkage rate to control overfitting through conservative approach
+               max_depth = 10, #how many levels in the tree
+               nround=10, #controls the maximum number of iterations.it is similar to the number of trees to grow(tuned using CV)
+               subsample = 0.5, #how much of the data to use for each tree
+               colsample_bytree = 0.5, #how many variables to consider for each tree
+               seed = 1,
+               eval_metric = "mlogloss",
+               objective = "multi:softprob",
+               num_class = 12,
+               nthread = 4,
+               missing=NA
+)
+
+## Anayse and visualize xgboost
+model <- xgb.dump(xgb, with_stats = T)
+model[1:10]
+names <- dimnames(data.matrix(X))[[2]]
+importance_matrix <- xgb.importance(names, model = xgb)
+
+xgb.plot.importance(importance_matrix[1:20,])
+# predict values in test set
+y_pred <- predict(xgb, data.matrix(X_test),missing=NA)
+
+preds <- as.data.frame(matrix(y_pred, nrow=12))
+rownames(preds) <- c('NDF','US','other','FR','CA','GB','ES','IT','PT','NL','DE','AU')
+preds_top5 <- as.vector(apply(preds, 2, function(x) names(sort(x)[12:8])))
+
+ids <- NULL
+for (i in 1:NROW(X_test)) {
+  idx <- X_test$id[i]
+  ids <- append(ids, rep(idx,5))
+}
+results <- NULL
+results$id <- ids
+results$country <- preds_top5
+# generate result file
+results <- as.data.frame(results)
+
+##############
+library(DiagrammeR)
+xgb.plot.tree(feature_names = names, model = xgb, n_first_tree = 20)
+######
+num.class=length(y)
+pred.cv = matrix(model_xgb$evaluation_log, nrow=length(model_xgb$evaluation_log)/num.class, ncol=num.class)
+pred.cv = max.col(pred.cv, "last")
