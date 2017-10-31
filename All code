@@ -1,6 +1,8 @@
 ###################### Load library and csv files  ########################
 
 #libraries
+library(randomForest)
+library(pROC)
 library(lattice)
 library(e1071)
 library(caret)
@@ -114,11 +116,132 @@ df_cat=read.csv(cat.file)
 #replacing missing values
 new_df$freqAction_detail[new_df$freqAction_detail==""]="-unkown-"
 new_df$first_affiliate_tracked[new_df$first_affiliate_tracked==""]="-unkown-"
-
+new_df_stored<-new_df
 
 ###################### Build model  ########################
 
+################ Decision Tree #############
 ###### First layer: Yes:NDF/NO:non_NDF
+new_df<-new_df_stored
+new_df$NDF<-ifelse(new_df$country_destination=='NDF',as.logical(1),as.logical(0))
+
+
+###### Convert character columns to numeric
+int_num<-function(x){
+  x<-as.numeric(x)
+}
+
+chr_num<-function(x){
+  x<-as.factor(x)
+  x<-as.numeric(x)
+}
+
+new_df[,c('age','signup_flow','totalActions', 'uniqueActions','uniqueAction_type','uniqueAction_detail')]<-sapply(new_df[,c('age','signup_flow','totalActions', 'uniqueActions','uniqueAction_type','uniqueAction_detail')],int_num)
+new_df[,c('date_account_created','timestamp_first_active','gender','signup_method','language','affiliate_channel','affiliate_provider',
+          "first_affiliate_tracked",'signup_app','first_device_type','first_browser','age_bucket',
+          'freqAction_detail','device')]<-sapply(
+            new_df[,c('date_account_created','timestamp_first_active','gender','signup_method','language','affiliate_channel','affiliate_provider',
+                      "first_affiliate_tracked",'signup_app','first_device_type','first_browser','age_bucket',
+                      'freqAction_detail','device')], chr_num
+          )
+
+###### Split the data set
+set.seed(1234)
+#split ratio is (train.csv : test.csv)
+split<-(nrow(train_users_df)/(nrow(test_user_df)+nrow(train_users_df)))
+trn_index<-sample(1:nrow(new_df),(split)*nrow(new_df))  
+trn<-new_df[trn_index, ]
+tst<-new_df[-trn_index,]
+
+###### Use Decision Tree method to fit the model
+dt<-rpart(NDF~uniqueAction_type+
+            age+
+            freqAction_detail+
+            signup_method+
+            time_sec+
+            totalActions+
+            timestamp_first_active+
+            uniqueActions+
+            first_browser+
+            uniqueAction_detail+
+            affiliate_channel+
+            language+
+            first_affiliate_tracked+
+            device+
+            date_account_created+
+            signup_app+
+            first_device_type+
+            signup_flow+
+            affiliate_provider, data = trn, method = "class")
+printcp(dt)
+fancyRpartPlot(dt)
+
+tst$pre_NDF <- predict(dt, tst, type = "class")
+tst$NDF_result<-ifelse(tst$NDF==tst$pre_NDF,1,0)
+tb_pre<-tst[,c('NDF','pre_NDF')]
+conclusion<-table(tb_pre)
+conclusion
+
+###### Accuracy of the first layer's model
+accuracy<-(conclusion[1]+conclusion[4])/sum(conclusion)
+accuracy
+auc(as.numeric(tst$NDF),as.numeric(tst$pre_NDF))
+
+###### Second layer: Yes:US/NO:non_US
+trn$US<-ifelse(trn$country_destination=='US',as.logical(1),as.logical(0))
+tst$US<-ifelse(tst$country_destination=='US',as.logical(1),as.logical(0))
+tst$pre_US<-ifelse(tst$pre_NDF==as.logical(1),as.logical(0),NA)
+tst_US<-subset(tst,pre_NDF==as.logical(0))
+
+###### Use xgboost method to fit the model
+dt<-rpart(US~uniqueAction_type+
+            age+
+            freqAction_detail+
+            signup_method+
+            time_sec+
+            totalActions+
+            timestamp_first_active+
+            uniqueActions+
+            first_browser+
+            uniqueAction_detail+
+            affiliate_channel+
+            language+
+            first_affiliate_tracked+
+            device+
+            date_account_created+
+            signup_app+
+            first_device_type+
+            signup_flow+
+            affiliate_provider, data = trn, method = "class")
+printcp(dt)
+fancyRpartPlot(dt)
+
+tst_US$pre_US <- predict(dt, tst_US, type = "class")
+tb_pre<-tst_US[,c('US','pre_US')]
+conclusion<-table(tb_pre)
+conclusion
+
+###### Accuracy of the second layer's model
+accuracy<-(conclusion[1]+conclusion[4])/sum(conclusion)
+accuracy
+auc(as.numeric(tst_US$US),as.numeric(tst_US$pre_US))
+
+###### Total accuracy of above two layer's model
+j=1
+for(i in 1:nrow(tst)){
+  if(tst$id[i]==tst_US$id[j]){
+    tst$pre_US[i]<-tst_US$pre_US[j]
+    j<-j+1
+  }
+}
+
+tst$US_result<-ifelse(tst$US==tst$pre_US,1,0)
+total_accuracy<-nrow(subset(tst,(US_result==1)&(NDF_result==1)))/nrow(tst)
+total_accuracy
+
+################ Xgboost #############
+###### First layer: Yes:NDF/NO:non_NDF
+new_df<-new_df_stored
 new_df$NDF<-ifelse(new_df$country_destination=='NDF',as.logical(1),as.logical(0))
 
 
@@ -164,6 +287,7 @@ conclusion
 ###### Accuracy of the first layer's model
 accuracy<-(conclusion[1]+conclusion[4])/sum(conclusion)
 accuracy
+auc(as.numeric(tst$NDF),as.numeric(tst$pre_NDF))
 
 ###### Importance rank of the parameters
 importance <- xgb.importance(feature_names =colnames(trn[,-c(1,15,24)]), model = bst)
@@ -190,6 +314,7 @@ conclusion
 ###### Accuracy of the second layer's model
 accuracy<-(conclusion[1]+conclusion[4])/sum(conclusion)
 accuracy
+auc(as.numeric(tst_US$US),as.numeric(tst_US$pre_US))
 
 ###### Importance rank of the parameters
 importance <- xgb.importance(feature_names =colnames(trn[,-c(1,15,24,25)]), model = bst)
