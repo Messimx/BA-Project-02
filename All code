@@ -348,7 +348,6 @@ labels = traind['country_destination']
 
 #XGBOOST
 #dummy variables creation
-labels=recode(labels$country_destination,"'NDF'=0; 'US'=1; 'other'=2; 'FR'=3; 'CA'=4; 'GB'=5; 'ES'=6; 'IT'=7; 'PT'=8; 'NL'=9; 'DE'=10; 'AU'=11")
 ohe_feats = c('gender', 'signup_method', 'signup_flow', 'language', 'affiliate_channel', 'affiliate_provider', 'first_affiliate_tracked', 'signup_app', 'first_device_type', 'first_browser','age_bucket','freqAction_detail','device')
 dummies <- dummyVars(~ gender + signup_method + signup_flow + language + affiliate_channel + affiliate_provider + first_affiliate_tracked + signup_app + first_device_type + first_browser+age_bucket+freqAction_detail+device, data = new_df)
 df_all_ohe <- as.data.frame(predict(dummies, newdata = new_df))
